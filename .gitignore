@@ -12,7 +12,8 @@ package/
 
 # Node.js
 node_modules/
-dist/
+# dist/ is committed for GitHub installs (bun doesn't run lifecycle scripts)
+dist/*.map
 *.log
 npm-debug.log*
 pnpm-debug.log*
