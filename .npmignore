@@ -1,0 +1,16 @@
+# Lock files — excluded to prevent bun from reading workspace resolution
+# when installing this package globally via `bun install -g github:...`
+bun.lock
+bun.lockb
+
+# Dev/source files not needed at runtime
+src/
+website/
+testing/
+.beads/
+.ralph-tui/
+*.md
+!README.md
+.eslintrc*
+eslint.config*
+tsconfig*

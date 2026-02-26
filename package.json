@@ -26,6 +26,7 @@
     "test": "bun test",
     "test:watch": "bun test --watch",
     "test:coverage": "bun test --coverage",
+    "prepare": "bun run build",
     "prepublishOnly": "bun run build",
     "website:dev": "cd website && bun run dev",
     "website:build": "cd website && bun run build",
