@@ -16067,6 +16067,166 @@ var init_output_formatting = __esm(() => {
   ANSI_REGEX = new RegExp("\\x1b\\[[0-9;?]*[a-zA-Z]|\\x1b\\][^\\x07]*\\x07|\\x1b[()][AB012]", "g");
 });
 
+// src/plugins/agents/jsonl-parser.ts
+function parseJsonlLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return { success: false, raw: line, error: "Empty line" };
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    const message = {
+      raw: parsed
+    };
+    if (typeof parsed.type === "string") {
+      message.type = parsed.type;
+    }
+    if (typeof parsed.message === "string") {
+      message.message = parsed.message;
+    }
+    if (typeof parsed.sessionId === "string") {
+      message.sessionId = parsed.sessionId;
+    }
+    if (parsed.result !== undefined) {
+      message.result = parsed.result;
+    }
+    if (parsed.tool && typeof parsed.tool === "object") {
+      const toolObj = parsed.tool;
+      message.tool = {
+        name: typeof toolObj.name === "string" ? toolObj.name : undefined,
+        input: toolObj.input && typeof toolObj.input === "object" ? toolObj.input : undefined
+      };
+    }
+    if (parsed.cost && typeof parsed.cost === "object") {
+      const costObj = parsed.cost;
+      message.cost = {
+        inputTokens: typeof costObj.inputTokens === "number" ? costObj.inputTokens : undefined,
+        outputTokens: typeof costObj.outputTokens === "number" ? costObj.outputTokens : undefined,
+        totalUSD: typeof costObj.totalUSD === "number" ? costObj.totalUSD : undefined
+      };
+    }
+    return { success: true, message };
+  } catch (err) {
+    return {
+      success: false,
+      raw: line,
+      error: err instanceof Error ? err.message : "Parse error"
+    };
+  }
+}
+function parseJsonlOutput(output) {
+  const messages = [];
+  const fallback = [];
+  const lines = output.split(`
+`);
+  for (const line of lines) {
+    const result = parseJsonlLine(line);
+    if (result.success) {
+      messages.push(result.message);
+    } else if (result.raw.trim()) {
+      fallback.push(result.raw);
+    }
+  }
+  return { messages, fallback };
+}
+function createStreamingJsonlParser() {
+  let buffer = "";
+  const messages = [];
+  const fallback = [];
+  return {
+    push(chunk) {
+      buffer += chunk;
+      const results = [];
+      let newlineIndex;
+      while ((newlineIndex = buffer.indexOf(`
+`)) !== -1) {
+        const line = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        const result = parseJsonlLine(line);
+        results.push(result);
+        if (result.success) {
+          messages.push(result.message);
+        } else if (result.raw.trim()) {
+          fallback.push(result.raw);
+        }
+      }
+      return results;
+    },
+    flush() {
+      if (!buffer.trim()) {
+        buffer = "";
+        return [];
+      }
+      const result = parseJsonlLine(buffer);
+      buffer = "";
+      if (result.success) {
+        messages.push(result.message);
+      } else if (result.raw.trim()) {
+        fallback.push(result.raw);
+      }
+      return [result];
+    },
+    getState() {
+      return { messages, fallback };
+    }
+  };
+}
+function parseJsonlLineToDisplayEvents(jsonLine) {
+  if (!jsonLine || jsonLine.length === 0)
+    return [];
+  try {
+    const event = JSON.parse(jsonLine);
+    const events = [];
+    if (event.type === "assistant" && event.message) {
+      const message = event.message;
+      if (message.content && Array.isArray(message.content)) {
+        for (const block of message.content) {
+          if (block.type === "text" && typeof block.text === "string") {
+            events.push({ type: "text", content: block.text });
+          } else if (block.type === "tool_use" && typeof block.name === "string") {
+            events.push({
+              type: "tool_use",
+              name: block.name,
+              input: block.input
+            });
+          }
+        }
+      }
+    }
+    if (event.type === "user") {
+      const message = event.message;
+      if (message?.content && Array.isArray(message.content)) {
+        for (const block of message.content) {
+          if (block.type === "tool_result" && block.is_error === true) {
+            const errorContent = typeof block.content === "string" ? block.content : "tool execution failed";
+            events.push({ type: "error", message: errorContent });
+          }
+        }
+      }
+      events.push({ type: "tool_result" });
+    }
+    if (event.type === "system") {
+      events.push({ type: "system", subtype: event.subtype });
+    }
+    if (event.type === "error" || event.error) {
+      const errorMsg = typeof event.error === "string" ? event.error : event.error?.message ?? "Unknown error";
+      events.push({ type: "error", message: errorMsg });
+    }
+    return events;
+  } catch {
+    return [];
+  }
+}
+function parseJsonlOutputToDisplayEvents(data) {
+  const allEvents = [];
+  for (const line of data.split(`
+`)) {
+    const events = parseJsonlLineToDisplayEvents(line.trim());
+    allEvents.push(...events);
+  }
+  return allEvents;
+}
+
 // src/plugins/agents/builtin/claude.ts
 import { spawn as spawn7 } from "child_process";
 var ClaudeAgentPlugin, createClaudeAgent = () => new ClaudeAgentPlugin, claude_default;
@@ -16263,61 +16423,6 @@ var init_claude = __esm(() => {
     getStdinInput(prompt, _files, _options) {
       return prompt;
     }
-    parseClaudeJsonLine(jsonLine) {
-      if (!jsonLine || jsonLine.length === 0)
-        return [];
-      try {
-        const event = JSON.parse(jsonLine);
-        const events = [];
-        if (event.type === "assistant" && event.message) {
-          const message = event.message;
-          if (message.content && Array.isArray(message.content)) {
-            for (const block of message.content) {
-              if (block.type === "text" && typeof block.text === "string") {
-                events.push({ type: "text", content: block.text });
-              } else if (block.type === "tool_use" && typeof block.name === "string") {
-                events.push({
-                  type: "tool_use",
-                  name: block.name,
-                  input: block.input
-                });
-              }
-            }
-          }
-        }
-        if (event.type === "user") {
-          const message = event.message;
-          if (message?.content && Array.isArray(message.content)) {
-            for (const block of message.content) {
-              if (block.type === "tool_result" && block.is_error === true) {
-                const errorContent = typeof block.content === "string" ? block.content : "tool execution failed";
-                events.push({ type: "error", message: errorContent });
-              }
-            }
-          }
-          events.push({ type: "tool_result" });
-        }
-        if (event.type === "system") {
-          events.push({ type: "system", subtype: event.subtype });
-        }
-        if (event.type === "error" || event.error) {
-          const errorMsg = typeof event.error === "string" ? event.error : event.error?.message ?? "Unknown error";
-          events.push({ type: "error", message: errorMsg });
-        }
-        return events;
-      } catch {
-        return [];
-      }
-    }
-    parseClaudeOutputToEvents(data) {
-      const allEvents = [];
-      for (const line of data.split(`
-`)) {
-        const events = this.parseClaudeJsonLine(line.trim());
-        allEvents.push(...events);
-      }
-      return allEvents;
-    }
     execute(prompt, files, options) {
       const isStreamingJson = options?.subagentTracing || this.printMode === "json" || this.printMode === "stream";
       const sandboxEnv = {};
@@ -16341,7 +16446,7 @@ var init_claude = __esm(() => {
               } catch {}
             }
           }
-          const events = this.parseClaudeOutputToEvents(data);
+          const events = parseJsonlOutputToDisplayEvents(data);
           if (events.length > 0) {
             if (options?.onStdoutSegments) {
               const segments = processAgentEventsToSegments(events);
@@ -16390,107 +16495,13 @@ var init_claude = __esm(() => {
 ` + "  5. On Linux VMs (especially as root): ensure IS_SANDBOX=1 is set in the environment";
     }
     static parseJsonlLine(line) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        return { success: false, raw: line, error: "Empty line" };
-      }
-      try {
-        const parsed = JSON.parse(trimmed);
-        const message = {
-          raw: parsed
-        };
-        if (typeof parsed.type === "string") {
-          message.type = parsed.type;
-        }
-        if (typeof parsed.message === "string") {
-          message.message = parsed.message;
-        }
-        if (typeof parsed.sessionId === "string") {
-          message.sessionId = parsed.sessionId;
-        }
-        if (parsed.result !== undefined) {
-          message.result = parsed.result;
-        }
-        if (parsed.tool && typeof parsed.tool === "object") {
-          const toolObj = parsed.tool;
-          message.tool = {
-            name: typeof toolObj.name === "string" ? toolObj.name : undefined,
-            input: toolObj.input && typeof toolObj.input === "object" ? toolObj.input : undefined
-          };
-        }
-        if (parsed.cost && typeof parsed.cost === "object") {
-          const costObj = parsed.cost;
-          message.cost = {
-            inputTokens: typeof costObj.inputTokens === "number" ? costObj.inputTokens : undefined,
-            outputTokens: typeof costObj.outputTokens === "number" ? costObj.outputTokens : undefined,
-            totalUSD: typeof costObj.totalUSD === "number" ? costObj.totalUSD : undefined
-          };
-        }
-        return { success: true, message };
-      } catch (err) {
-        return {
-          success: false,
-          raw: line,
-          error: err instanceof Error ? err.message : "Parse error"
-        };
-      }
+      return parseJsonlLine(line);
     }
     static parseJsonlOutput(output) {
-      const messages = [];
-      const fallback = [];
-      const lines = output.split(`
-`);
-      for (const line of lines) {
-        const result = ClaudeAgentPlugin.parseJsonlLine(line);
-        if (result.success) {
-          messages.push(result.message);
-        } else if (result.raw.trim()) {
-          fallback.push(result.raw);
-        }
-      }
-      return { messages, fallback };
+      return parseJsonlOutput(output);
     }
     static createStreamingJsonlParser() {
-      let buffer = "";
-      const messages = [];
-      const fallback = [];
-      return {
-        push(chunk) {
-          buffer += chunk;
-          const results = [];
-          let newlineIndex;
-          while ((newlineIndex = buffer.indexOf(`
-`)) !== -1) {
-            const line = buffer.slice(0, newlineIndex);
-            buffer = buffer.slice(newlineIndex + 1);
-            const result = ClaudeAgentPlugin.parseJsonlLine(line);
-            results.push(result);
-            if (result.success) {
-              messages.push(result.message);
-            } else if (result.raw.trim()) {
-              fallback.push(result.raw);
-            }
-          }
-          return results;
-        },
-        flush() {
-          if (!buffer.trim()) {
-            buffer = "";
-            return [];
-          }
-          const result = ClaudeAgentPlugin.parseJsonlLine(buffer);
-          buffer = "";
-          if (result.success) {
-            messages.push(result.message);
-          } else if (result.raw.trim()) {
-            fallback.push(result.raw);
-          }
-          return [result];
-        },
-        getState() {
-          return { messages, fallback };
-        }
-      };
+      return createStreamingJsonlParser();
     }
   };
   claude_default = createClaudeAgent;
@@ -41552,7 +41563,7 @@ function formatOpenCodeEventForDisplay(event) {
   }
   return;
 }
-function parseJsonlLine(line) {
+function parseJsonlLine2(line) {
   if (!line.trim())
     return;
   try {
@@ -41658,7 +41669,7 @@ function parseAgentOutput(rawOutput, agentPlugin) {
         continue;
       }
     }
-    const parsed = parseJsonlLine(line);
+    const parsed = parseJsonlLine2(line);
     if (parsed !== undefined) {
       hasJsonl = true;
       parsedParts.push(parsed);
@@ -64896,4 +64907,4 @@ export {
   AgentRegistry
 };
 
-//# debugId=94D880DB45AE0B9E64756E2164756E21
+//# debugId=920AA6383665575864756E2164756E21
