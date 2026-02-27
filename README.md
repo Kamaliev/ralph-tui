@@ -31,6 +31,39 @@ ralph-tui run --prd ./prd.json
 
 That's it! Ralph will work through your tasks autonomously.
 
+## Installation
+
+### Install from npm
+
+```bash
+# Install the latest version globally
+bun install -g ralph-tui
+
+# Or explicitly install latest
+bun install -g ralph-tui@latest
+
+# Install a specific version
+bun install -g ralph-tui@0.11.0
+```
+
+### Update
+
+```bash
+# Update to the latest version
+bun install -g ralph-tui@latest
+```
+
+### Verify
+
+```bash
+# Check installed version
+ralph-tui --version
+```
+
+### Standalone Binaries
+
+Pre-built binaries for macOS (arm64) and Linux (x64) are available on the [GitHub Releases](https://github.com/subsy/ralph-tui/releases) page. Download the binary for your platform and run it directly — no bun or Node.js required.
+
 ## Documentation
 
 **[ralph-tui.com](https://ralph-tui.com)** - Full documentation, guides, and examples.
