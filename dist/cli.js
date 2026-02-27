@@ -18470,7 +18470,8 @@ var init_qwen = __esm(() => {
       supportsStreaming: true,
       supportsInterrupt: true,
       supportsFileContext: false,
-      supportsSubagentTracing: false
+      supportsSubagentTracing: true,
+      structuredOutputFormat: "jsonl"
     };
     model;
     skipPermissions = false;
@@ -18592,6 +18593,8 @@ var init_qwen = __esm(() => {
       if (this.model) {
         args.push("-m", this.model);
       }
+      args.push("--verbose");
+      args.push("--output-format", "stream-json");
       if (this.skipPermissions) {
         args.push("--yolo");
       }
@@ -18601,44 +18604,41 @@ var init_qwen = __esm(() => {
       return prompt;
     }
     execute(prompt, files, options) {
-      let textBuffer = "";
-      const flushBuffer = () => {
-        if (!textBuffer)
-          return;
-        const events = parseQwenOutput(textBuffer);
-        if (events.length > 0) {
-          if (options?.onStdoutSegments) {
-            const segments = processAgentEventsToSegments(events);
-            if (segments.length > 0) {
-              options.onStdoutSegments(segments);
-            }
-          }
-          if (options?.onStdout) {
-            const formatted = processAgentEvents(events);
-            if (formatted.length > 0) {
-              options.onStdout(formatted);
-            }
-          }
-        }
-        textBuffer = "";
-      };
       const parsedOptions = {
         ...options,
-        onStdout: options?.onStdout || options?.onStdoutSegments ? (data) => {
-          const combined = textBuffer + data;
-          const lines = combined.split(`
-`);
-          if (!data.endsWith(`
+        onStdoutSegments: options?.onStdoutSegments ? () => {} : undefined,
+        onStdout: options?.onStdout || options?.onStdoutSegments || options?.onJsonlMessage ? (data) => {
+          if (options?.onJsonlMessage) {
+            for (const line of data.split(`
 `)) {
-            textBuffer = lines.pop() || "";
-          } else {
-            textBuffer = "";
+              const trimmed = line.trim();
+              if (!trimmed)
+                continue;
+              try {
+                const rawJson = JSON.parse(trimmed);
+                options.onJsonlMessage(rawJson);
+              } catch {}
+            }
           }
-          const completeData = lines.join(`
-`);
-          if (!completeData)
+          const events = parseJsonlOutputToDisplayEvents(data);
+          if (events.length === 0 && data.trim()) {
+            const fallbackEvents = parseQwenOutput(data);
+            if (fallbackEvents.length > 0) {
+              if (options?.onStdoutSegments) {
+                const segments = processAgentEventsToSegments(fallbackEvents);
+                if (segments.length > 0) {
+                  options.onStdoutSegments(segments);
+                }
+              }
+              if (options?.onStdout) {
+                const formatted = processAgentEvents(fallbackEvents);
+                if (formatted.length > 0) {
+                  options.onStdout(formatted);
+                }
+              }
+            }
             return;
-          const events = parseQwenOutput(completeData);
+          }
           if (events.length > 0) {
             if (options?.onStdoutSegments) {
               const segments = processAgentEventsToSegments(events);
@@ -18653,11 +18653,7 @@ var init_qwen = __esm(() => {
               }
             }
           }
-        } : undefined,
-        onEnd: (result) => {
-          flushBuffer();
-          options?.onEnd?.(result);
-        }
+        } : undefined
       };
       return super.execute(prompt, files, parsedOptions);
     }
@@ -64328,4 +64324,4 @@ main().catch((error48) => {
   process.exit(1);
 });
 
-//# debugId=61473891CE5F801E64756E2164756E21
+//# debugId=325665F2DFFFEDB664756E2164756E21

@@ -1,12 +1,14 @@
 /**
  * ABOUTME: QWEN CLI Coder agent plugin for Alibaba Cloud's Qwen command.
  * Integrates with QWEN CLI Coder for AI-assisted coding.
- * Supports: text output parsing, stdin prompt, model selection, SIGINT interruption.
+ * Supports: structured JSONL output parsing, stdin prompt, model selection,
+ * skip-permissions (--yolo), and SIGINT interruption.
  */
 
 import { spawn } from 'node:child_process';
 import { BaseAgentPlugin, quoteForWindowsShell } from '../base.js';
 import { processAgentEvents, processAgentEventsToSegments, type AgentDisplayEvent } from '../output-formatting.js';
+import { parseJsonlOutputToDisplayEvents } from '../jsonl-parser.js';
 import type {
   AgentPluginMeta,
   AgentPluginFactory,
@@ -19,7 +21,7 @@ import type {
 
 /**
  * Parse raw QWEN CLI text output into standardized display events.
- * Since QWEN CLI does not emit structured JSON, all output is treated as plain text.
+ * Used as a fallback when lines are not valid JSONL (graceful degradation).
  * @internal Exported for testing only.
  */
 export function parseQwenOutput(data: string): AgentDisplayEvent[] {
@@ -47,7 +49,8 @@ export class QwenAgentPlugin extends BaseAgentPlugin {
     supportsStreaming: true,
     supportsInterrupt: true,
     supportsFileContext: false,
-    supportsSubagentTracing: false,
+    supportsSubagentTracing: true,
+    structuredOutputFormat: 'jsonl',
   };
 
   private model?: string;
@@ -203,6 +206,11 @@ export class QwenAgentPlugin extends BaseAgentPlugin {
       args.push('-m', this.model);
     }
 
+    // Structured JSONL streaming output for tool call visibility
+    // Qwen CLI requires --verbose when using --output-format stream-json (same as Claude)
+    args.push('--verbose');
+    args.push('--output-format', 'stream-json');
+
     // Skip permission prompts for autonomous operation
     if (this.skipPermissions) {
       args.push('--yolo');
@@ -224,59 +232,64 @@ export class QwenAgentPlugin extends BaseAgentPlugin {
   }
 
   /**
-   * Override execute to parse QWEN text output into display events.
-   * Wraps onStdout/onStdoutSegments callbacks to parse text and buffer partial lines.
+   * Override execute to parse QWEN JSONL output into structured display events.
+   * Wraps onStdout/onStdoutSegments callbacks to parse JSONL lines and emit
+   * AgentDisplayEvent[] through processAgentEventsToSegments().
+   *
+   * Non-JSON lines are treated as plain text (graceful fallback).
    */
   override execute(
     prompt: string,
     files?: AgentFileContext[],
     options?: AgentExecuteOptions
   ): AgentExecutionHandle {
-    // Buffer for incomplete lines split across chunks
-    let textBuffer = '';
-
-    // Helper to flush remaining buffer content
-    const flushBuffer = () => {
-      if (!textBuffer) return;
-
-      const events = parseQwenOutput(textBuffer);
-      if (events.length > 0) {
-        if (options?.onStdoutSegments) {
-          const segments = processAgentEventsToSegments(events);
-          if (segments.length > 0) {
-            options.onStdoutSegments(segments);
-          }
-        }
-        if (options?.onStdout) {
-          const formatted = processAgentEvents(events);
-          if (formatted.length > 0) {
-            options.onStdout(formatted);
-          }
-        }
-      }
-
-      textBuffer = '';
-    };
-
-    // Wrap callbacks to parse text output
     const parsedOptions: AgentExecuteOptions = {
       ...options,
-      onStdout: (options?.onStdout || options?.onStdoutSegments)
+      // TUI-native segments callback (preferred) — set up as no-op since
+      // actual segments come from the onStdout wrapper below
+      onStdoutSegments: options?.onStdoutSegments
+        ? () => { /* segments emitted from onStdout wrapper */ }
+        : undefined,
+      // Main parsing wrapper: parse JSONL lines into display events
+      onStdout: (options?.onStdout || options?.onStdoutSegments || options?.onJsonlMessage)
         ? (data: string) => {
-            const combined = textBuffer + data;
-            const lines = combined.split('\n');
-
-            // If data doesn't end with newline, last line is incomplete - buffer it
-            if (!data.endsWith('\n')) {
-              textBuffer = lines.pop() || '';
-            } else {
-              textBuffer = '';
+            // Forward raw JSONL messages to the callback if provided
+            if (options?.onJsonlMessage) {
+              for (const line of data.split('\n')) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+                try {
+                  const rawJson = JSON.parse(trimmed) as Record<string, unknown>;
+                  options.onJsonlMessage(rawJson);
+                } catch {
+                  // Not valid JSON, skip for JSONL callback
+                }
+              }
             }
 
-            const completeData = lines.join('\n');
-            if (!completeData) return;
+            // Parse JSONL lines into display events (handles both JSON and plain text fallback)
+            const events = parseJsonlOutputToDisplayEvents(data);
 
-            const events = parseQwenOutput(completeData);
+            // Fallback: if no structured events were extracted, treat raw data as plain text
+            if (events.length === 0 && data.trim()) {
+              const fallbackEvents = parseQwenOutput(data);
+              if (fallbackEvents.length > 0) {
+                if (options?.onStdoutSegments) {
+                  const segments = processAgentEventsToSegments(fallbackEvents);
+                  if (segments.length > 0) {
+                    options.onStdoutSegments(segments);
+                  }
+                }
+                if (options?.onStdout) {
+                  const formatted = processAgentEvents(fallbackEvents);
+                  if (formatted.length > 0) {
+                    options.onStdout(formatted);
+                  }
+                }
+              }
+              return;
+            }
+
             if (events.length > 0) {
               if (options?.onStdoutSegments) {
                 const segments = processAgentEventsToSegments(events);
@@ -293,10 +306,6 @@ export class QwenAgentPlugin extends BaseAgentPlugin {
             }
           }
         : undefined,
-      onEnd: (result) => {
-        flushBuffer();
-        options?.onEnd?.(result);
-      },
     };
 
     return super.execute(prompt, files, parsedOptions);
