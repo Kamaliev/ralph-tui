@@ -51,6 +51,10 @@ export class QwenAgentPlugin extends BaseAgentPlugin {
   };
 
   private model?: string;
+
+  /** Skip permission prompts for autonomous operation */
+  private skipPermissions = false;
+
   protected override defaultTimeout = 0;
 
   override async initialize(config: Record<string, unknown>): Promise<void> {
@@ -58,6 +62,10 @@ export class QwenAgentPlugin extends BaseAgentPlugin {
 
     if (typeof config.model === 'string' && config.model.length > 0) {
       this.model = config.model;
+    }
+
+    if (typeof config.skipPermissions === 'boolean') {
+      this.skipPermissions = config.skipPermissions;
     }
 
     if (typeof config.timeout === 'number' && config.timeout > 0) {
@@ -172,6 +180,14 @@ export class QwenAgentPlugin extends BaseAgentPlugin {
         required: false,
         help: 'QWEN Coder model to use',
       },
+      {
+        id: 'skipPermissions',
+        prompt: 'Skip permission prompts?',
+        type: 'boolean',
+        default: false,
+        required: false,
+        help: 'Enable --yolo for autonomous operation (skip interactive approval prompts)',
+      },
     ];
   }
 
@@ -185,6 +201,11 @@ export class QwenAgentPlugin extends BaseAgentPlugin {
     // Model selection
     if (this.model) {
       args.push('-m', this.model);
+    }
+
+    // Skip permission prompts for autonomous operation
+    if (this.skipPermissions) {
+      args.push('--yolo');
     }
 
     return args;

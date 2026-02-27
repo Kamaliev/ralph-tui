@@ -18472,11 +18472,15 @@ var init_qwen = __esm(() => {
       supportsSubagentTracing: false
     };
     model;
+    skipPermissions = false;
     defaultTimeout = 0;
     async initialize(config2) {
       await super.initialize(config2);
       if (typeof config2.model === "string" && config2.model.length > 0) {
         this.model = config2.model;
+      }
+      if (typeof config2.skipPermissions === "boolean") {
+        this.skipPermissions = config2.skipPermissions;
       }
       if (typeof config2.timeout === "number" && config2.timeout > 0) {
         this.defaultTimeout = config2.timeout;
@@ -18571,6 +18575,14 @@ var init_qwen = __esm(() => {
           default: "",
           required: false,
           help: "QWEN Coder model to use"
+        },
+        {
+          id: "skipPermissions",
+          prompt: "Skip permission prompts?",
+          type: "boolean",
+          default: false,
+          required: false,
+          help: "Enable --yolo for autonomous operation (skip interactive approval prompts)"
         }
       ];
     }
@@ -18578,6 +18590,9 @@ var init_qwen = __esm(() => {
       const args = [];
       if (this.model) {
         args.push("-m", this.model);
+      }
+      if (this.skipPermissions) {
+        args.push("--yolo");
       }
       return args;
     }
@@ -64907,4 +64922,4 @@ export {
   AgentRegistry
 };
 
-//# debugId=920AA6383665575864756E2164756E21
+//# debugId=236B564D01E0942164756E2164756E21
