@@ -207,8 +207,6 @@ export class QwenAgentPlugin extends BaseAgentPlugin {
     }
 
     // Structured JSONL streaming output for tool call visibility
-    // Qwen CLI requires --verbose when using --output-format stream-json (same as Claude)
-    args.push('--verbose');
     args.push('--output-format', 'stream-json');
 
     // Skip permission prompts for autonomous operation
